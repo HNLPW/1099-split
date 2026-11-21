@@ -102,6 +102,7 @@ details.panel summary{cursor:pointer;font-weight:600}
 .knobs{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .edit{display:flex;flex-direction:column;gap:6px}
 .erow{display:grid;grid-template-columns:1fr 100px 32px;gap:6px;align-items:center}
+.erow.hb{grid-template-columns:1fr 90px 120px 32px}
 .erow.debt5{grid-template-columns:1.4fr 1fr .7fr .8fr 1fr 32px}
 .erow .del{padding:6px;border:0;color:var(--muted)}
 .ehead{font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
@@ -110,6 +111,7 @@ details.panel summary{cursor:pointer;font-weight:600}
 .status{font-size:.78rem;color:var(--muted);margin:0}
 .flag{border-left:3px solid var(--bad);padding:6px 10px;font-size:.85rem;background:var(--field);border-radius:0 6px 6px 0}
 @media (max-width:480px){
+  .erow.hb{grid-template-columns:1fr 80px 32px}.erow.hb select{grid-column:1/3}
   .stats{grid-template-columns:1fr 1fr}.qgrid{grid-template-columns:1fr 1fr}.knobs{grid-template-columns:1fr}
   .erow.debt5{grid-template-columns:1fr 1fr 1fr;}
   .erow.debt5 .del{justify-self:end}
@@ -147,7 +149,8 @@ details.panel summary{cursor:pointer;font-weight:600}
           <select id="src">
             <option value="contract">CA contract (Roman Sanford)</option>
             <option value="teaching">Teaching (Ragged Edge / GTI)</option>
-            <option value="hnl">HNL owner's pay (from Relay)</option>
+            <option value="hnlrev">HNL job payment (customer)</option>
+            <option value="hnl">HNL owner's pay to me (from Relay)</option>
             <option value="other">Other 1099</option>
           </select>
         </label>
@@ -175,6 +178,19 @@ details.panel summary{cursor:pointer;font-weight:600}
     <div class="panel">
       <div class="debts" id="debts"></div>
       <p class="note">Highest APR first. The tick on each bar is 30% of the limit. Balances count down by the extra payments you log; update them from statements once a month in Plan settings.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2 id="hnlTitle">HNL this month</h2>
+    <div class="panel">
+      <div class="check" id="hnlCheck"></div>
+      <div class="meters" id="hnlMeters"></div>
+      <h3>HNL bills</h3>
+      <div class="check" id="hnlBills"></div>
+      <h3>HNL debt</h3>
+      <div class="debts" id="hnlDebts"></div>
+      <p class="note">Tracking only. HNL pays its own debt from OpEx; nothing here touches your personal split. Update balances from statements in Plan settings.</p>
     </div>
   </section>
 
@@ -255,6 +271,31 @@ details.panel summary{cursor:pointer;font-weight:600}
       <div class="edit" id="debtEd"></div>
       <button class="small" id="addDebt">Add debt</button>
 
+      <h3>HNL accounts</h3>
+      <div class="knobs">
+        <label for="hA-wf">Where customer payments land<input id="hA-wf" data-hacct="wf"></label>
+        <label for="hA-wfBills">WF bills account<input id="hA-wfBills" data-hacct="wfBills"></label>
+        <label for="hA-income">Relay income<input id="hA-income" data-hacct="income"></label>
+        <label for="hA-opex">Relay operating expenses<input id="hA-opex" data-hacct="opex"></label>
+      </div>
+      <h3>HNL Relay split %</h3>
+      <div class="knobs">
+        <label for="hP-profit">Profit<input id="hP-profit" type="number" step="1" min="0" max="100" data-hpct="profit"></label>
+        <label for="hP-op">Owner's pay<input id="hP-op" type="number" step="1" min="0" max="100" data-hpct="op"></label>
+        <label for="hP-tax">Tax<input id="hP-tax" type="number" step="1" min="0" max="100" data-hpct="tax"></label>
+        <label for="hP-opex">Operating expenses<input id="hP-opex" type="number" step="1" min="0" max="100" data-hpct="opex"></label>
+      </div>
+      <p class="note" id="hPctNote">Match these to your Relay Profit First rule.</p>
+      <label for="hExp">Expected HNL revenue per month<input id="hExp" type="number" step="100" min="0"></label>
+
+      <h3>HNL bills</h3>
+      <div class="edit" id="hnlBillsEd"></div>
+      <button class="small" id="addHnlBill">Add HNL bill</button>
+
+      <h3>HNL debts</h3>
+      <div class="edit" id="hnlDebtEd"></div>
+      <button class="small" id="addHnlDebt">Add HNL debt</button>
+
       <h3>Rates &amp; rules</h3>
       <div class="knobs">
         <label for="kFed">Federal income tax %<input id="kFed" type="number" step="0.5" min="0" max="40"></label>
@@ -271,11 +312,20 @@ details.panel summary{cursor:pointer;font-weight:600}
 const BLANK={
   accounts:{hrc:"HRC",tax:"TAX",bills:"BILLS",dave:"DAVE",save:"SAVE"},
   expected:0, fed:12, nc:3.99, cushionPct:20, teachDebt:95, dave:0, buffer:0,
-  bills:[], hrcCosts:[], subs:[], debts:[]
+  bills:[], hrcCosts:[], subs:[], debts:[],
+  hnl:{accounts:{wf:"HNL (WF)",wfBills:"HNL Bills (WF)",income:"Relay Income",opex:"Relay OpEx"},pct:{profit:5,op:50,tax:15,opex:30},expected:0,bills:[],debts:[]}
 };
+const HNL_PAYS={opex:"Relay OpEx",wf:"HNL (WF)",wfBills:"HNL Bills (WF)"};
+function normalize(p){
+  const b=JSON.parse(JSON.stringify(BLANK)), h=p.hnl||{};
+  const out={...b,...p};
+  out.accounts={...b.accounts,...(p.accounts||{})};
+  out.hnl={...b.hnl,...h,accounts:{...b.hnl.accounts,...(h.accounts||{})},pct:{...b.hnl.pct,...(h.pct||{})}};
+  return out;
+}
 const WAGE_BASE=184500;
 const QUARTERS=[{d:"Apr 15",iso:"2026-04-15",p:"Jan–Mar"},{d:"Jun 15",iso:"2026-06-15",p:"Apr–May"},{d:"Sep 15",iso:"2026-09-15",p:"Jun–Aug"},{d:"Jan 15",iso:"2027-01-15",p:"Sep–Dec"}];
-const SRC_LABEL={contract:"CA contract",teaching:"Teaching",hnl:"HNL pay",other:"Other 1099"};
+const SRC_LABEL={contract:"CA contract",teaching:"Teaching",hnl:"HNL owner's pay",hnlrev:"HNL job payment",other:"Other 1099"};
 const C={tax:"var(--tax)",hrc:"var(--hrc)",bills:"var(--bills)",dave:"var(--dave)",buf:"var(--buf)",cush:"var(--cush)",debt:"var(--debt)"};
 let P=JSON.parse(JSON.stringify(BLANK)); let entries=[]; let planRef=null, entriesCol=null, ready=false;
 const $=id=>document.getElementById(id);
@@ -291,7 +341,7 @@ $("dt").value=today();
 const billsTotal=()=>sum(P.bills,b=>b.a);
 const hrcTotal=()=>sum(P.hrcCosts,b=>b.a);
 const subsMonthly=()=>sum(P.subs,s=>s.yearly?s.a/12:s.a);
-function ytdIncome(year,beforeTs){return sum(entries.filter(e=>e.kind==="dep"&&e.src!=="hnl"&&e.date.startsWith(year)&&(!beforeTs||e.ts<beforeTs)),e=>e.amt)}
+function ytdIncome(year,beforeTs){return sum(entries.filter(e=>e.kind==="dep"&&e.src!=="hnl"&&e.src!=="hnlrev"&&e.date.startsWith(year)&&(!beforeTs||e.ts<beforeTs)),e=>e.amt)}
 function seRate(prior,amt){
   const full=0.153*0.9235, med=0.029*0.9235;
   const under=Math.max(0,Math.min(amt,WAGE_BASE/0.9235-prior));
@@ -315,6 +365,7 @@ function target(){return debtsSorted().find(d=>projBal(d)>0)}
 function allocate(amt,src,date){
   const o={tax:0,taxR:0,hrc:0,bills:0,dave:0,buf:0,cush:0,debt:0,kid:0};
   let r=amt;
+  if(src==="hnlrev"){const pc=P.hnl.pct;["profit","op","tax","opex"].forEach(k=>o["h_"+k]=r2(amt*(+pc[k]||0)/100));return o}
   if(src!=="hnl"){o.taxR=taxRate(ytdIncome(date.slice(0,4)),amt);o.tax=r2(amt*o.taxR);r-=o.tax}
   if(src==="teaching"){o.debt=r2(r*P.teachDebt/100);o.kid=r2(r-o.debt);return o}
   const m=mtd(date.slice(0,7));
@@ -347,6 +398,22 @@ function renderDeposit(){
   const o=allocate(amt,src,date), A=P.accounts, t=target(), tn=t?t.n:"debt";
   const from=src==="hnl"?"Relay owner's pay":A.hrc;
   let rows;
+  if(src==="hnlrev"){
+    const H=P.hnl.accounts,pc=P.hnl.pct;
+    rows=[
+      {c:C.hrc,k:`Deposit in ${H.wf}`,s:"Checks and card payments land here",v:amt},
+      {c:C.bills,k:`${H.wf} → ${H.income}`,s:"Whole amount, on your next allocation day (10th or 25th)",v:amt},
+      {c:C.cush,k:`Relay → Profit`,s:`${pc.profit}%`,v:o.h_profit},
+      {c:C.dave,k:`Relay → Owner's Pay`,s:`${pc.op}%`,v:o.h_op},
+      {c:C.tax,k:`Relay → Tax`,s:`${pc.tax}%`,v:o.h_tax},
+      {c:C.debt,k:`Relay → ${H.opex}`,s:`${pc.opex}%, pays HNL bills and funds the WF autopays`,v:o.h_opex}];
+    const shown=rows.slice(2);
+    $("stack").innerHTML=amt?shown.filter(x=>x.v>0).map(x=>`<span style="width:${x.v/amt*100}%;background:${x.c}"></span>`).join(""):"";
+    $("slips").innerHTML=rows.map((x,i)=>`<div class="slip${x.v>0?"":" zero"}"><span class="n">${i<2?i+1:"·"}</span><span class="bar" style="background:${x.c}"></span><div><b>${esc(x.k)}</b><small>${esc(x.s)}</small></div><span class="money">${fmt2(x.v)}</span></div>`).join("");
+    const tot=["profit","op","tax","opex"].reduce((t,k)=>t+(+pc[k]||0),0);
+    $("srcNote").textContent=(tot!==100?`Your Relay split adds to ${tot}%, not 100%. Fix it in Plan settings. `:"")+"Relay's rule does the split itself. This just shows where the money ends up. Nothing here touches your personal accounts.";
+    return;
+  }
   if(src==="teaching") rows=[
     {c:C.tax,k:`${from} → ${A.tax}`,s:`Tax ${(o.taxR*100).toFixed(1)}%`,v:o.tax},
     {c:C.debt,k:`${from} → ${A.save} → ${tn}`,s:`${P.teachDebt}% of after-tax, extra payment`,v:o.debt},
@@ -363,7 +430,7 @@ function renderDeposit(){
   let n=0;
   $("slips").innerHTML=rows.map(x=>`<div class="slip${x.v>0?"":" zero"}"><span class="n">${x.v>0?++n:"–"}</span><span class="bar" style="background:${x.c}"></span><div><b>${esc(x.k)}</b><small>${esc(x.s)}</small></div><span class="money">${fmt2(x.v)}</span></div>`).join("");
   $("srcNote").textContent=src==="teaching"?"Have teaching gigs pay HRC so every 1099 dollar lands in one place."
-    :src==="hnl"?"HNL's Relay system already reserves tax on HNL profit, so this skips the tax step."
+    :src==="hnl"?"Only for money Relay's Owner's Pay sends to you. HNL's Relay system already reserves tax on HNL profit, so this skips the tax step."
     :"";
 }
 function renderMonth(){
@@ -407,6 +474,8 @@ function renderLog(){
   const sorted=[...entries].sort((a,b)=>b.date.localeCompare(a.date)||b.ts-a.ts);
   const x=e=>`<td><button class="x" data-id="${esc(e.id)}" aria-label="Delete entry">✕</button></td>`;
   $("log").innerHTML=sorted.length?sorted.map(e=>{
+    if(e.kind==="dep"&&e.src==="hnlrev") return `<tr><td>${e.date.slice(5)}</td><td>HNL job payment<small>to Relay · OpEx ${fmt(e.h_opex||0)}</small></td><td class="money">${fmt2(e.amt)}</td>${x(e)}</tr>`;
+    if(e.kind==="hnlfund") return `<tr><td>${e.date.slice(5)}</td><td>OpEx → ${esc(HNL_PAYS[e.acct]||e.acct)}</td><td class="money">${fmt2(e.amt)}</td>${x(e)}</tr>`;
     if(e.kind==="dep"){
       const bits=[["tax",e.tax],["bills",e.bills],["dave",e.dave||e.kid],["buffer",e.buf],["debt",e.debt]].filter(b=>b[1]>0).map(b=>`${b[0]} ${fmt(b[1])}`).join(" · ");
       return `<tr><td>${e.date.slice(5)}</td><td>${esc(SRC_LABEL[e.src]||e.src)}<small>${bits}</small></td><td class="money">${fmt2(e.amt)}</td>${x(e)}</tr>`;
@@ -416,7 +485,46 @@ function renderLog(){
     return "";
   }).join(""):`<tr><td class="note">Nothing logged yet. Log your next deposit above.</td></tr>`;
 }
-function renderLive(){renderCheck();renderDeposit();renderMonth();renderDebts();renderTax();renderLog()}
+function hnlBillsBy(acct){return sum(P.hnl.bills.filter(b=>(b.acct||"opex")===acct),b=>b.yearly?b.a/12:b.a)}
+function hnlBillsTotal(){return sum(P.hnl.bills,b=>b.yearly?b.a/12:b.a)}
+function debtRow(d){
+  const b=+d.bal||0, lim=+d.limit||0, pct=lim?Math.min(100,b/lim*100):0;
+  return `<div class="debt"><span class="nm">${esc(d.n)}${b<=0?'<span class="tag done">Paid off</span>':""}</span><span class="money">${fmt2(b)}</span>
+    ${lim?`<div class="track"><span style="width:${pct}%;background:${b<=0?"var(--good)":pct>30?"var(--debt)":"var(--buf)"}"></span><i class="mark" style="left:30%"></i></div>`:""}
+    <span class="meta">${d.apr!=null&&d.apr!==""?d.apr+"% APR":"APR unknown"} · min ${d.min?fmt(d.min):"?"}${d.pays?` from ${esc(HNL_PAYS[d.pays]||d.pays)}`:""}${lim?` · ${Math.round(pct)}% of ${fmt(lim)} limit`:""}${d.asOf?` · as of ${d.asOf}`:""}</span></div>`;
+}
+function renderHnl(){
+  const H=P.hnl, A=H.accounts, month=today().slice(0,7), pc=H.pct;
+  const mine=entries.filter(e=>e.date&&e.date.startsWith(month));
+  const rev=sum(mine.filter(e=>e.kind==="dep"&&e.src==="hnlrev"),e=>e.amt);
+  const opex=sum(mine.filter(e=>e.kind==="dep"&&e.src==="hnlrev"),e=>e.h_opex);
+  const minDebt=sum(H.debts,d=>d.min);
+  const need=hnlBillsTotal()+minDebt;
+  const exp=+H.expected||0, expOpex=exp*(+pc.opex||0)/100;
+  $("hnlTitle").textContent="HNL, "+new Date(month+"-15").toLocaleDateString("en-US",{month:"long"});
+  const ln=(c,l,v,cls,sub)=>`<div class="ln"><span><span class="dot" style="background:${c}"></span>${l}${sub?` <span class="note">${sub}</span>`:""}</span><span class="money ${cls||""}">${v}</span></div>`;
+  $("hnlCheck").innerHTML=
+    ln(C.debt,"Fixed bills + debt minimums",fmt(need),"",`${H.bills.length} bills`)+
+    (exp?ln(C.cush,`OpEx at ${fmt(exp)}/mo revenue`,fmt(expOpex),"",`${pc.opex}%`)+
+      `<div class="ln total"><span>${expOpex>=need?"OpEx left for fuel, chemicals, labor":"OpEx short of fixed costs"}</span><span class="money ${expOpex>=need?"pos":"neg"}">${fmt(expOpex-need)}</span></div>`:"")+
+    (exp&&expOpex<need?`<div class="flag">At this revenue, OpEx doesn't cover HNL's fixed costs. Either revenue goes up, the OpEx % goes up, or costs come down.</div>`:"");
+  const funded=a=>sum(mine.filter(e=>e.kind==="hnlfund"&&e.acct===a),e=>e.amt);
+  const debtBy=a=>sum(H.debts.filter(d=>d.pays===a),d=>d.min);
+  const meter=(c,l,acct,have,needv,key)=>{
+    const p=needv?Math.min(100,have/needv*100):0, short=r2(needv-have);
+    return `<div class="meter"><div class="top"><b><span class="dot" style="background:${c}"></span>${l} <span class="note">${esc(acct)}</span></b><span class="money">${fmt(have)}${needv?` / ${fmt(needv)}`:""}</span></div>${needv?`<div class="track"><span style="width:${p}%;background:${c}"></span></div>`:""}${key&&short>0?`<div class="act">Move ${fmt2(short)} from ${esc(A.opex)} by the 1st. <button class="small" data-hfund="${key}" data-amt="${short}">Log transfer</button></div>`:""}</div>`;
+  };
+  const wfNeed=hnlBillsBy("wf")+debtBy("wf"), wfbNeed=hnlBillsBy("wfBills")+debtBy("wfBills");
+  $("hnlMeters").innerHTML=
+    meter(C.bills,"Job payments in",A.wf,rev,0)+
+    meter(C.debt,"Relay OpEx share",A.opex,opex,0)+
+    (wfbNeed?meter(C.hrc,"Fund WF bills account",A.wfBills,funded("wfBills"),wfbNeed,"wfBills"):"")+
+    (wfNeed?meter(C.hrc,"Fund WF autopays",A.wf,funded("wf"),wfNeed,"wf"):"");
+  const groups=["opex","wfBills","wf"].map(k=>[k,P.hnl.bills.filter(b=>(b.acct||"opex")===k)]).filter(g=>g[1].length);
+  $("hnlBills").innerHTML=groups.map(([k,bs])=>`<div class="ln"><span><b>${esc(k==="opex"?A.opex:k==="wf"?A.wf:A.wfBills)}</b></span><span class="money">${fmt(sum(bs,b=>b.yearly?b.a/12:b.a))}/mo</span></div>`+bs.map(b=>`<div class="ln"><span class="note">${esc(b.n)}${b.yearly?" (yearly)":""}</span><span class="money note">${fmt2(b.yearly?b.a/12:b.a)}</span></div>`).join("")).join("")||`<p class="note">No HNL bills yet. Add them in Plan settings.</p>`;
+  $("hnlDebts").innerHTML=H.debts.map(debtRow).join("")||`<p class="note">No HNL debts yet.</p>`;
+}
+function renderLive(){renderCheck();renderDeposit();renderMonth();renderDebts();renderHnl();renderTax();renderLog()}
 
 /* ---------- settings editors (rebuilt only on load / add / remove, so typing keeps focus) ---------- */
 function listEditor(el,key,opts){
@@ -435,7 +543,31 @@ function debtEditor(){
       <input id="d-l-${i}" aria-label="Limit" type="number" step="100" value="${d.limit??""}" data-d="${i}" data-f="limit">
       <button class="del" data-deld="${i}" aria-label="Remove">✕</button></div>`).join("");
 }
+function hnlBillEditor(){
+  const A=P.hnl.accounts;
+  $("hnlBillsEd").innerHTML=P.hnl.bills.map((b,i)=>`<div class="erow hb">
+    <input id="hb-n-${i}" aria-label="Name" value="${esc(b.n)}" data-hb="${i}" data-f="n">
+    <input id="hb-a-${i}" aria-label="Amount" type="number" step="0.01" value="${b.a}" data-hb="${i}" data-f="a">
+    <select id="hb-p-${i}" aria-label="Paid from" data-hb="${i}" data-f="acct">${["opex","wfBills","wf"].map(k=>`<option value="${k}"${(b.acct||"opex")===k?" selected":""}>${esc(k==="opex"?A.opex:k==="wf"?A.wf:A.wfBills)}</option>`).join("")}</select>
+    <button class="del" data-delhb="${i}" aria-label="Remove">✕</button></div>
+    <label style="flex-direction:row;align-items:center;gap:6px;margin:-2px 0 4px"><input type="checkbox" style="width:auto" id="hb-y-${i}" data-hb="${i}" data-f="yearly" ${b.yearly?"checked":""}>Billed yearly</label>`).join("")+
+    `<div class="etot"><span>Monthly total</span><span class="money" id="hb-tot">${fmt2(hnlBillsTotal())}</span></div>`;
+}
+function hnlDebtEditor(){
+  $("hnlDebtEd").innerHTML=`<div class="erow debt5 ehead debt5"><span>Name</span><span>Balance</span><span>APR %</span><span>Min</span><span>Limit</span><span></span></div>`+
+    P.hnl.debts.map((d,i)=>`<div class="erow debt5">
+      <input id="hd-n-${i}" aria-label="Name" value="${esc(d.n)}" data-hd="${i}" data-f="n">
+      <input id="hd-b-${i}" aria-label="Balance" type="number" step="0.01" value="${d.bal}" data-hd="${i}" data-f="bal">
+      <input id="hd-r-${i}" aria-label="APR" type="number" step="0.01" value="${d.apr??""}" placeholder="?" data-hd="${i}" data-f="apr">
+      <input id="hd-m-${i}" aria-label="Minimum" type="number" step="1" value="${d.min??""}" data-hd="${i}" data-f="min">
+      <input id="hd-l-${i}" aria-label="Limit" type="number" step="100" value="${d.limit??""}" data-hd="${i}" data-f="limit">
+      <button class="del" data-delhd="${i}" aria-label="Remove">✕</button></div>`).join("");
+}
 function fillSettings(){
+  document.querySelectorAll("[data-hacct]").forEach(i=>i.value=P.hnl.accounts[i.dataset.hacct]||"");
+  document.querySelectorAll("[data-hpct]").forEach(i=>i.value=P.hnl.pct[i.dataset.hpct]);
+  $("hExp").value=P.hnl.expected||"";
+  hnlBillEditor();hnlDebtEditor();
   document.querySelectorAll("[data-acct]").forEach(i=>i.value=P.accounts[i.dataset.acct]||"");
   $("expIn").value=P.expected||"";$("kDave").value=P.dave;$("kBuf").value=P.buffer;
   $("kFed").value=P.fed;$("kNC").value=P.nc;$("kCush").value=P.cushionPct;$("kTeach").value=P.teachDebt;
@@ -464,8 +596,10 @@ async function saveBackup(){
 }
 function restoreBackup(text){
   let d;try{d=JSON.parse(text)}catch(e){$("status").textContent="That file isn't a 1099 Split backup.";return}
-  const plan=d.plan||d; if(!plan||!Array.isArray(plan.bills)){$("status").textContent="That file isn't a 1099 Split backup.";return}
-  P={...JSON.parse(JSON.stringify(BLANK)),...plan};
+  const plan=d.plan||d;
+  if(plan&&plan.hnl&&!Array.isArray(plan.bills)){P=normalize({...P,hnl:plan.hnl});lsSet("plan",P);fillSettings();renderLive();$("status").textContent="Loaded HNL bills and debt. Your personal plan is unchanged.";return}
+  if(!plan||!Array.isArray(plan.bills)){$("status").textContent="That file isn't a 1099 Split backup.";return}
+  P=normalize(plan);
   if(Array.isArray(d.entries)){const have=new Set(entries.map(e=>e.id));d.entries.forEach(e=>{if(e&&e.id&&!have.has(e.id))entries.push(e)})}
   lsSet("plan",P);lsSet("e",entries);fillSettings();renderLive();
   $("status").textContent=`Restored your plan${d.entries&&d.entries.length?` and ${d.entries.length} log entries`:""}.`;
@@ -482,6 +616,15 @@ $("expIn").addEventListener("input",e=>{P.expected=parseFloat(e.target.value)||0
 document.querySelectorAll("[data-acct]").forEach(i=>i.addEventListener("input",()=>{P.accounts[i.dataset.acct]=i.value;renderLive();savePlan()}));
 $("settings").addEventListener("input",e=>{
   const t=e.target;
+  if(t.dataset.hacct){P.hnl.accounts[t.dataset.hacct]=t.value;renderLive();savePlan();return}
+  if(t.dataset.hpct){P.hnl.pct[t.dataset.hpct]=parseFloat(t.value)||0;renderLive();savePlan();return}
+  if(t.id==="hExp"){P.hnl.expected=parseFloat(t.value)||0;renderLive();savePlan();return}
+  if(t.dataset.hb!==undefined){const b=P.hnl.bills[+t.dataset.hb],f=t.dataset.f;
+    if(f==="yearly")b.yearly=t.checked; else if(f==="a")b.a=parseFloat(t.value)||0; else b[f]=t.value;
+    $("hb-tot").textContent=fmt2(hnlBillsTotal());renderLive();savePlan();return}
+  if(t.dataset.hd!==undefined){const d=P.hnl.debts[+t.dataset.hd],f=t.dataset.f;
+    if(f==="n")d.n=t.value; else {d[f]=t.value===""?null:parseFloat(t.value); if(f==="bal")d.asOf=today();}
+    renderLive();savePlan();return}
   if(t.dataset.k){const it=P[t.dataset.k][+t.dataset.i];
     if(t.dataset.f==="yearly")it.yearly=t.checked; else if(t.dataset.f==="a")it.a=parseFloat(t.value)||0; else it.n=t.value;
     refreshTotals();renderLive();savePlan()}
@@ -493,15 +636,30 @@ $("settings").addEventListener("input",e=>{
 $("settings").addEventListener("click",e=>{
   const b=e.target.closest("button");if(!b)return;
   if(b.dataset.del){P[b.dataset.del].splice(+b.dataset.i,1);fillSettings();renderLive();savePlan()}
+  if(b.dataset.delhb!==undefined){P.hnl.bills.splice(+b.dataset.delhb,1);hnlBillEditor();renderLive();savePlan()}
+  if(b.dataset.delhd!==undefined){P.hnl.debts.splice(+b.dataset.delhd,1);hnlDebtEditor();renderLive();savePlan()}
   if(b.dataset.deld!==undefined){P.debts.splice(+b.dataset.deld,1);debtEditor();renderLive();savePlan()}
 });
 $("addBill").addEventListener("click",()=>{P.bills.push({n:"New bill",a:0});fillSettings();savePlan()});
 $("addHrc").addEventListener("click",()=>{P.hrcCosts.push({n:"New cost",a:0});fillSettings();savePlan()});
 $("addSub").addEventListener("click",()=>{P.subs.push({n:"New subscription",a:0});fillSettings();savePlan()});
+$("addHnlBill").addEventListener("click",()=>{P.hnl.bills.push({n:"New HNL bill",a:0,acct:"opex"});hnlBillEditor();renderLive();savePlan()});
+$("addHnlDebt").addEventListener("click",()=>{P.hnl.debts.push({n:"New HNL debt",bal:0,apr:null,min:null,limit:null,asOf:today()});hnlDebtEditor();renderLive();savePlan()});
+$("hnlMeters").addEventListener("click",async e=>{
+  const b=e.target.closest("button[data-hfund]");if(!b)return;
+  const amt=parseFloat(b.dataset.amt);
+  await addEntry({kind:"hnlfund",acct:b.dataset.hfund,amt,date:today()});
+  $("status").textContent=`Logged ${fmt2(amt)} from ${P.hnl.accounts.opex} to ${HNL_PAYS[b.dataset.hfund]}.`;
+});
 $("addDebt").addEventListener("click",()=>{P.debts.push({n:"New debt",bal:0,apr:null,min:null,limit:null,asOf:today()});debtEditor();renderLive();savePlan()});
 $("logBtn").addEventListener("click",async()=>{
   const amt=parseFloat($("amt").value)||0;if(amt<=0)return;
   const src=$("src").value,date=$("dt").value||today(),o=allocate(amt,src,date),t=target();
+  if(src==="hnlrev"){
+    await addEntry({kind:"dep",amt,src,date,h_profit:o.h_profit,h_op:o.h_op,h_tax:o.h_tax,h_opex:o.h_opex});
+    $("status").textContent=`Logged ${fmt2(amt)} for HNL. Move it from ${P.hnl.accounts.wf} to ${P.hnl.accounts.income} on your next allocation day.`;
+    return;
+  }
   const e={kind:"dep",amt,src,date,tax:o.tax,hrc:o.hrc,bills:o.bills,dave:o.dave,buf:o.buf,cush:o.cush,debt:o.debt,kid:o.kid,debtTo:t?t.n:""};
   await addEntry(e);
   $("status").textContent=`Logged ${fmt2(amt)}. ${o.tax?`Send ${fmt2(o.tax)} to ${P.accounts.tax}. `:""}${o.debt?`Pay ${fmt2(o.debt)} extra on ${t?t.n:"debt"}.`:""}`;
@@ -522,7 +680,7 @@ $("log").addEventListener("click",e=>{const b=e.target.closest("button[data-id]"
 $("bkSave").addEventListener("click",saveBackup);
 $("bkLoadBtn").addEventListener("click",()=>$("bkFile").click());
 $("bkFile").addEventListener("change",async e=>{const f=e.target.files[0];if(f)restoreBackup(await f.text());e.target.value=""});
-P={...JSON.parse(JSON.stringify(BLANK)),...lsGet("plan",{})};entries=lsGet("e",[]);
+P=normalize(lsGet("plan",{}));entries=lsGet("e",[]);
 fillSettings();renderLive();renderBackupNote();
 $("status").textContent=P.bills.length?"Saved on this phone.":"No plan yet. Tap Restore from backup and pick the plan file to load your numbers.";
 try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
